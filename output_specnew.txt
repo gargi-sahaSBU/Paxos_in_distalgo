@@ -1,0 +1,12 @@
+run number:1
+time taken by this run: 0.953868473006878
+run number:2
+time taken by this run: 1.16730660101166
+run number:3
+time taken by this run: 1.3771183000062592
+run number:4
+time taken by this run: 8.982623709001928
+run number:5
+time taken by this run: 36.790367003995925
+mean:9.85425681740453
+median:1.3771183000062592

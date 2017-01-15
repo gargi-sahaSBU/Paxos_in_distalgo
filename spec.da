@@ -1,0 +1,191 @@
+import sys
+import time
+import random
+
+'''
+SAFETY reqs:
+replica:
+all replicas must have same command decided for the same slot
+'''
+NOPS = 10  # number of different operations that the state machine can do
+# operation i maps a state to a pair of new state and result of i on state
+def operation(i): return lambda state: (state+[i], ['result',i,'on',state])
+operations = {i: operation(i) for i in range(NOPS)}
+
+# wrong: all closures get i = NOPS - 1
+# ops = {i: (lambda state: (state+[i], ['res',i]+state)) for i in range(NOPS)}
+
+class Replica(process):
+    def setup(leaders, initial_state):
+        '''
+        slot_num contains the index of the next slot the replica needs
+        to learn a decision for before it an update its state
+        '''
+        self.state = initial_state;  self.slot_num = 1
+
+    def serve():
+      while True:
+        if await(some(received(('request', p)), has=
+                      each(sent(('propose', s, _p)), has=
+                           some(received(('decision', _s, p2)), has= p2!=p)))):
+        
+            output('Replica:',self.id,' rcvd req with (cli_id,cmd_id,cmd_val):',p)
+            used_s = max((setof(s, sent(('propose', s, _))) |
+                          setof(s, received(('decision', s, _)))) or {0})
+            # within used+1, find the smallest that is not yet used
+            s = min(setof(s, s in range(1, used_s + 1 + 1), 
+                             not(some(sent(('propose', _s ,_))) or
+                                 some(received(('decision', _s, _))))))
+            output('Replica:',self.id,' assigns slot:', s,' to req:',p,' and sends proposal to leaders')
+            send(('propose', s, p), to= leaders)
+        elif some(received(('decision', _slot_num, p))):
+            #if there is no s < slot_num that still has no decision, then update state
+            if not some(received(('decision', s, _p)), has= s < slot_num):
+                client, cmd_id, op = p
+                output('Replica:',self.id,' has state:',state)
+                state, result = operations[op](state)
+                output('Replica:',self.id,' gets updated state:',state,' returns result:',result,' for req with cmd id:',cmd_id,' to client:',client)
+                send(('response', cmd_id, result), to= client)
+            slot_num += 1
+            output('Replica:',self.id,' updated slot_num to:', slot_num)
+        elif received(('done',)):
+            output('Replica:',self.id,' terminating')
+            break
+
+    def run():
+        serve()
+
+class Leader(process):
+  def setup(acceptors, replicas):
+      #ballot nos are ordered pairs of an increasing sequence number and leader identifier
+      self.ballot = (0, self.id)  # ballot number
+
+  def lead():
+    while True:
+      send(('1a', ballot), to= acceptors)
+      if await(len(setof(a, received(('1b', _ballot, _), from_= a)))
+               > len(acceptors)/2):
+        output('process:',self.id,'is now leader')
+        for (s,p) in pmax(setof(t, received(('1b', _ballot, accepted)),
+                                t in accepted)):
+          send(('2a', ballot, s, p), to= acceptors)
+
+        while True:
+          if await(some(received(('propose', s, p)), has=
+                        not some(sent(('2a', _, _s, _))))):
+            send(('2a', ballot, s, p), to= acceptors)
+          elif some(received(('2b', _ballot, s, p)), has=
+                    len(setof(a, received(('2b', _ballot, _s, _p), from_= a)))
+                    > len(acceptors)/2 and
+                    not sent(('decision', s, p))):  # not in DistAlgo vesion
+            output('Leader:',self.id, ' received decision for slot_num,req:',s, p, ' and is responding to replica')
+            send(('decision', s, p,), to= replicas)
+          elif (some(received(('1b',b,_)), has= b > ballot) or \
+                some(received(('2b',b,_,_)), has= b > ballot)):
+            output('leader:',self.id,' is no more the leader')
+            break
+          elif received(('done',)):
+            break
+
+      elif some(received(('1b',b,_)), has= b > ballot) or \
+           some(received(('2b',b,_,_)), has= b > ballot):
+        pass
+
+      elif received(('done',)):
+        output('Leader',self.id,' terminating')
+        break
+
+      ballot = (ballot[0]+1, self.id)
+      now = time.time()
+      timeout = random.random()
+      await((time.time() - now) >= timeout)
+
+
+  def pmax(pvals):
+      return setof((s, p), (b, s, p) in pvals,
+                           each((b2, _s, _) in pvals, has= b2 <= b))
+
+  def run():
+      lead()
+
+class Acceptor(process):
+    #acceptors are servers having leaders as their clients
+    #acceptors have 2 variables: ballot_num and accepted
+    #accepted has pvalue <b,s,p> sets
+    #alpha adopts b
+    #alpha accepts pvalue e
+    #alpha accepted e(<b,s,p>) only if b = ballot_num
+    #for a particular b and s only one p should be under consideration by all acceptors
+    def setup(): pass
+
+    def receive(msg=('1a', b), from_= leader):
+        ballot = max((setof(b, received(('1a', b))) |
+                      setof(b, received(('2a', b, _, _))))
+                     or {(-1, -1)})
+        accepted = setof((ballot, s, p),
+                         (s,p) in pmax(setof((b,s,p), received(('2a',b, s, p)))))
+        output('Acceptor:',self.id,' curr ballot:',ballot,' rcvd 1a frm:',leader,' with ballot num:',b)
+        send(('1b', ballot, accepted), to= leader)
+
+    def receive(msg=('2a', b, s, p), from_= leader):
+        ballot = max((setof(b, received(('1a', b))) |
+                      setof(b, received(('2a', b, _, _))))
+                     or {(-1, -1)})
+        output('Acceptor:',self.id,' curr ballot:',ballot,' rcvd 2a frm:',leader,' with b,s,p:',b,s,p)
+        send(('2b', ballot, s, p), to= leader)
+
+    def pmax(pvals):
+        return setof((s, p), (b, s, p) in pvals,
+	                      each((b2, _s, _) in pvals, has= b2 <= b))
+
+    def run():
+        await(received(('done',)))
+        output('Acceptor:',self.id,' terminating')
+
+class Client(process):
+    def setup(replicas, nops):
+        self.cid = 0           # command id
+        self.results = dict()  # map of command id to result of command
+        self.count = dict()    # map of command id to number of responses
+
+    def run():
+        for i in range(nops):
+            p = random.randint(0, NOPS-1)
+            send(('request', (self.id, cid, p)),
+                 to= replicas)
+            output('client:',self.id,'sent request:cid:',cid,' command:',p)
+            await(cid in results)
+            output('client:',self.id,'received result:cid:', cid, ' result:',results[cid])
+            cid += 1
+        await(each(cid in range(nops), has= count[cid] == len(replicas)))
+        output('client:',self.id,' terminating')
+
+    def receive(msg= ('response', cid, result)):
+        output('### response', cid, result)
+        if cid not in results:
+            results[cid] = result
+        elif results[cid] != result:
+            output('SAFETY REQ VIOLATED!!!!', cid, result, 'than', results[cid])
+            raise RuntimeError('Desynced!!!!')
+        count[cid] = 1 if cid not in count else count[cid] + 1
+
+def main():
+    nacceptors = int(sys.argv[1]) if len(sys.argv) > 1 else 8
+    nreplicas = int(sys.argv[2]) if len(sys.argv) > 2 else 8
+    nleaders = int(sys.argv[3]) if len(sys.argv) > 3 else 2
+    nclients = int(sys.argv[4]) if len(sys.argv) > 4 else 5
+    nops = int(sys.argv[5]) if len(sys.argv) > 5 else 3
+
+    acceptors = new(Acceptor, (), num= nacceptors)
+    replicas = new(Replica, num= nreplicas)
+    leaders = new(Leader, (acceptors, replicas), num= nleaders)
+    initial_state = [];  setup(replicas, (leaders, initial_state))
+    clients = new(Client, (replicas, nops), num= nclients)
+
+    start(acceptors)
+    start(replicas | leaders)
+    start(clients)
+
+    for c in clients: c.join()
+    print('done')
+    send(('done',), to= (acceptors|replicas|leaders))

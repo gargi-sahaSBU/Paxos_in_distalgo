@@ -1,0 +1,57 @@
+Distalgo version used is 1.0.0b19
+Operating system used is Mac OS X 10.10.5.
+
+part 1:
+Test and evaluate orig.da and spec.da in terms of correctness and running times. 
+
+A)Running time evaluation : You need to run the programs for at least 3 each of replicas, leaders, and acceptors, for a given number of clients, and 5 increasing numbers of operations upto a given number. For running times, your program should take an additional argument for how many times to run a test and should report the mean and standard deviations of the running times.
+
+runningtime.py is the program that will accept 3 arguments: number of runs followed by program to run(orig.da/spec.da/specnew.da) followed by the output file you want to copy the running times to. it will run the distalgo program for that many number of times. An example of invocation for runningtime.py is :
+python3 runningtime.py 10 orig.da output_orig.txt
+
+This will make the program run orig.da for 10 times, with 5 increasing number of operations each time starting with 1 request for orig.da and 5 in case of spec.da(as orig.da throws an error for higher number of operations). 
+The program will write the time taken for all 10 runs into output_orig.txt.
+
+The number of leaders for orig.da has been hard coded to 1 instead of 3 due to a termination problem I'm running to if I increase the number of leaders to more than 1 for orig.da.(this issue has been explained in the following section.)
+runningtime.py also calculates the mean and median of running times and writes it to the end of the output file.
+
+Whenever, and if at all it got stuck in a particular run(happens at times for orig.da), I would just pre-empt it with Ctrl+C and it would move on to the next run with higher number of operations.
+
+I have also added the following files in the submission folder: output_spec.txt, output_specnew.txt and output_orig.txt corresponding to the following respective command invocations:
+1)python3 runningtime.py 5 spec.da output_spec.txt
+2)python3 runningtime.py 5 specnew.da output_specnew.txt
+3)python3 runningtime.py 5 orig.da output_orig.txt
+
+orig.da:
+Issues that I came across: 
+1) "Message too long" error is seen when I run with 3 each of leaders, acceptors, replicas and clients and 20 messages.
+2) Does not run with more than 1 leader. If I add more than 1 leader, only one will terminate while the others never do and I have to manually terminate it using Ctrl+C. It is not an os x issue because I ran in my friend's Windows system and faced the same issue.
+
+spec.da:
+Runs with much lesser number of issues than orig.da. Can have even upto 100 requests. 
+When I increase number of replicas,leaders,acceptors and clients to 5 each and run for 100 operations, it gets stuck in a livelock. So I added a timeout interval after higher ballot number selection as follows:
+"
+ballot = (ballot[0]+1, self.id)
+now = time.time()
+timeout = random.random()
+await((time.time() - now) >= timeout)
+"
+This certainly helped alleviate the problem. It would still run into livelocks but only for very short intervals of time and the rest of the time it runs smoothly without throwing any errors at all.
+
+B)Correctness : For testing correctness, you need to test that all decisions satisfy the safety/agreement property.
+
+In order to test that correctness is satisfied, we need to make sure that no two replicas have different operations for the same slot number in their list of decisions.
+
+For spec.da I have added my own debug prints that log the entire sequence of operations being performed along with 
+description of the operation. If you search for "has state" in the logs produced after a run,  it shows what the state was prior to applying an operation and what the state is after applying. When we tally the state value for different replicas, it turns out to be the same. I did the same for orig.da except that I tried it out with the existing debug prints and did not add debug prints of my own.
+
+--------------------------------------------------------------------------------------------------------------------------
+Part 2:
+A)For spec.da, merge the leader and acceptor into one kind of process.
+
+The merged program is given specnew.da, the acceptor was merged into the leader, and the merged process was named leader for convenience sake.
+
+B)Then test for correctness and performance as in part 1.
+The logs produced by specnew.da are identical to the ones for spec.da and can be tallied to verify that safety requirements are met by this new program. No two replicas have different commands for the same slot in its decisions.
+The performance of specnew.da was measured and recorded using runningtime.py. I observed that the running time of specnew.da is usually less than that of spec.da for the same number of operations.
+
